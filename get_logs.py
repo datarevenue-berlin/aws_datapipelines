@@ -11,7 +11,9 @@ import argparse
 
 logging.basicConfig(level=logging.INFO)
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(
+    description='Download logs of AWS datapipeline.'
+)
 parser.add_argument('name', help='Name of the datapipeline you want '
                                  'to get logs of.')
 parser.add_argument('--logdir',
@@ -29,9 +31,12 @@ parser.add_argument('--region',
                     help='AWS region to use (may be stored in '
                          'AWS_REGION env var)',
                     default=os.environ.get('AWS_REGION', default=None))
+parser.add_argument('--date',
+                    help='Date in format YYYY-MM-DD. If not specified, '
+                         'newest logs will be downloaded.')
 
 
-def find_newest_files(path, fs):
+def find_dir(path, fs, date=None):
     walk = fs.walk(path)
     dirs = {os.path.dirname(item) for item in walk}
     max_date = dt.datetime(1990, 1, 1, tzinfo=tzutc())
@@ -39,6 +44,9 @@ def find_newest_files(path, fs):
     for dir_ in dirs:
         files = fs.ls(dir_, detail=True)
         for file in files:
+            if date is not None and file['LastModified'].date() == date:
+                newest_file = file['Key']
+                break
             if file['LastModified'] > max_date:
                 newest_file = file['Key']
                 max_date = file['LastModified']
@@ -68,7 +76,7 @@ def find_pipeline(pipelines, name):
     return pipeline_id
 
 
-def main(name, s3_bucket, profile_name, region_name):
+def main(name, s3_bucket, profile_name, region_name, date):
     client = boto3.session \
         .Session(profile_name=profile_name, region_name=region_name) \
         .client('datapipeline')
@@ -79,7 +87,7 @@ def main(name, s3_bucket, profile_name, region_name):
     description = client.describe_pipelines(pipelineIds=[pipeline_id])
     logging.info('Found pipeline with id {}'.format(pipeline_id))
     pipeline_s3_dir = os.path.join(s3_bucket, pipeline_id)
-    newest_dir = find_newest_files(pipeline_s3_dir, fs)
+    newest_dir = find_dir(pipeline_s3_dir, fs, date=date)
     logging.info('Newest dir is {}'.format(os.path.basename(newest_dir)))
     for file in fs.ls(newest_dir):
         filename = os.path.basename(file)
@@ -89,4 +97,6 @@ def main(name, s3_bucket, profile_name, region_name):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    main(args.name, args.logdir, args.profile, args.region)
+    if args.date is not None:
+        args.date = dt.datetime.strptime(args.date, '%Y-%m-%d').date()
+    main(args.name, args.logdir, args.profile, args.region, args.date)
